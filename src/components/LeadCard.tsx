@@ -15,7 +15,7 @@ import {
   Trash2,
   FileText,
   PhoneForwarded,
-  Check,
+  MessageSquare,
 } from 'lucide-react';
 import { CallStage, Lead, STAGE_CONFIG } from '../types/lead';
 
@@ -33,37 +33,29 @@ export const LeadCard: React.FC<LeadCardProps> = ({
   onAdvanceStage,
 }) => {
   const currentConfig = STAGE_CONFIG[lead.currentStage] || STAGE_CONFIG.NOT_CALLED;
-  const currentStep = currentConfig.stepNumber;
 
-  // Determine latest note
-  let latestNote = '';
-  let latestNoteLabel = '';
-  let latestDate = '';
-
-  if (lead.call4Note) {
-    latestNote = lead.call4Note;
-    latestNoteLabel = 'Call 4';
-    latestDate = lead.call4Date;
-  } else if (lead.call3Note) {
-    latestNote = lead.call3Note;
-    latestNoteLabel = 'Call 3';
-    latestDate = lead.call3Date;
-  } else if (lead.call2Note) {
-    latestNote = lead.call2Note;
-    latestNoteLabel = 'Call 2';
-    latestDate = lead.call2Date;
-  } else if (lead.call1Note) {
-    latestNote = lead.call1Note;
-    latestNoteLabel = 'Call 1';
-    latestDate = lead.call1Date;
+  // Build notes in descending order (Call 4 -> Call 3 -> Call 2 -> Call 1)
+  const descendingNotes: { num: 1 | 2 | 3 | 4; date: string; note: string }[] = [];
+  if (lead.call4Note?.trim()) {
+    descendingNotes.push({ num: 4, date: lead.call4Date, note: lead.call4Note.trim() });
+  }
+  if (lead.call3Note?.trim()) {
+    descendingNotes.push({ num: 3, date: lead.call3Date, note: lead.call3Note.trim() });
+  }
+  if (lead.call2Note?.trim()) {
+    descendingNotes.push({ num: 2, date: lead.call2Date, note: lead.call2Note.trim() });
+  }
+  if (lead.call1Note?.trim()) {
+    descendingNotes.push({ num: 1, date: lead.call1Date, note: lead.call1Note.trim() });
   }
 
-  const calls: { num: 1 | 2 | 3 | 4; date: string; note: string }[] = [
-    { num: 1, date: lead.call1Date, note: lead.call1Note },
-    { num: 2, date: lead.call2Date, note: lead.call2Note },
-    { num: 3, date: lead.call3Date, note: lead.call3Note },
-    { num: 4, date: lead.call4Date, note: lead.call4Note },
-  ];
+  // Determine Scheduled Meeting text
+  const meetingText =
+    lead.scheduledMeeting && lead.scheduledMeeting !== 'None'
+      ? lead.scheduledMeeting
+      : lead.nextFollowUpType === 'Meeting Scheduled' && lead.nextFollowUpDate
+      ? `${lead.nextFollowUpDate}${lead.nextFollowUpTime ? ` @ ${lead.nextFollowUpTime}` : ''}`
+      : null;
 
   return (
     <div
@@ -142,53 +134,53 @@ export const LeadCard: React.FC<LeadCardProps> = ({
           </div>
         </div>
 
-        {/* AT-A-GLANCE FOLLOW-UP & MEETING STATUS */}
+        {/* SCHEDULED MEETINGS & FOLLOW-UP STATUS */}
         <div className="my-2 space-y-1.5">
+          {meetingText && (
+            <div
+              onClick={() => onEditCallNotes(lead)}
+              className="p-2.5 rounded-lg bg-emerald-500/10 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800/80 flex items-center justify-between text-xs cursor-pointer hover:bg-emerald-500/15 transition-colors"
+              title="Click to view meeting schedule"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-6 h-6 rounded-md bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                  <Calendar className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <span className="font-bold text-emerald-900 dark:text-emerald-200 text-[10px] uppercase tracking-wide block">
+                    Scheduled Meeting:
+                  </span>
+                  <span className="font-semibold text-slate-900 dark:text-white truncate block">
+                    {meetingText}
+                  </span>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 dark:bg-emerald-900 dark:text-emerald-200 shrink-0">
+                Confirmed
+              </span>
+            </div>
+          )}
+
           {lead.hasNextFollowUp || lead.nextFollowUpDate ? (
             <div
               onClick={() => onEditCallNotes(lead)}
-              className="p-2.5 rounded-lg bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/80 dark:border-amber-800/80 flex items-center justify-between text-xs cursor-pointer hover:bg-amber-500/15 transition-colors"
-              title="Click to view or edit follow-up schedule"
+              className="p-2 rounded-lg bg-amber-500/10 dark:bg-amber-950/30 border border-amber-300/70 dark:border-amber-800/70 flex items-center justify-between text-xs cursor-pointer hover:bg-amber-500/15 transition-colors"
+              title="Click to view follow-up schedule"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-6 h-6 rounded-md bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
-                  <Clock className="w-3.5 h-3.5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-bold text-amber-900 dark:text-amber-200 text-[10px] uppercase tracking-wide">
-                      {lead.nextFollowUpType || 'Follow-up'}:
-                    </span>
-                    <span className="font-semibold text-slate-900 dark:text-white truncate">
-                      {lead.nextFollowUpDate}
-                    </span>
-                  </div>
-                  {lead.nextFollowUpTime && (
-                    <span className="text-[11px] text-amber-700 dark:text-amber-300 font-medium block">
-                      Time: {lead.nextFollowUpTime}
-                    </span>
-                  )}
-                </div>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="text-[11px] text-amber-900 dark:text-amber-200 font-semibold truncate">
+                  Follow-up: {lead.nextFollowUpDate}
+                  {lead.nextFollowUpTime ? ` @ ${lead.nextFollowUpTime}` : ''}
+                </span>
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200 shrink-0">
-                Active
+              <span className="text-[10px] text-amber-700 dark:text-amber-300 font-medium">
+                {lead.nextFollowUpType || 'Call'}
               </span>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onEditCallNotes(lead)}
-              className="w-full py-1.5 px-2.5 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-600 bg-slate-50/50 dark:bg-slate-850/40 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 text-[11px] flex items-center justify-between transition-colors cursor-pointer"
-            >
-              <span className="flex items-center gap-1.5">
-                <Clock className="w-3 h-3 text-slate-400" />
-                <span>No follow-up set</span>
-              </span>
-              <span className="font-semibold text-blue-600 dark:text-blue-400">+ Schedule Follow-up</span>
-            </button>
-          )}
+          ) : null}
 
-          {/* FREE WEBSITE STATUS CHIP */}
+          {/* Free Website Status Chip */}
           <div
             onClick={() => onEditCallNotes(lead)}
             className={`px-2.5 py-1.5 rounded-lg border text-xs flex items-center justify-between cursor-pointer transition-colors ${
@@ -198,8 +190,6 @@ export const LeadCard: React.FC<LeadCardProps> = ({
                 ? 'bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800'
                 : lead.freeWebsiteStatus === 'Website Reviewing'
                 ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800'
-                : lead.currentStage === 'CALL_1'
-                ? 'bg-purple-50/70 text-purple-800 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800'
                 : 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-400 dark:border-slate-700'
             }`}
           >
@@ -212,93 +202,58 @@ export const LeadCard: React.FC<LeadCardProps> = ({
                   ? 'Free Website Sent'
                   : lead.freeWebsiteStatus === 'Website Reviewing'
                   ? 'Awaiting Website Review'
-                  : lead.freeWebsiteStatus === 'Declined / Not Needed'
-                  ? 'Website Declined / Not Needed'
-                  : lead.currentStage === 'CALL_1'
-                  ? '1st Call: Ask if they need free website'
-                  : 'Free Website: Not Asked'}
+                  : lead.freeWebsiteStatus || 'Free Website: Not Asked'}
               </span>
             </div>
-            <span className="text-[10px] font-bold opacity-75 shrink-0">
-              {lead.freeWebsiteStatus === 'To Send Free Website' ? 'Action' : 'Edit'}
+          </div>
+        </div>
+
+        {/* CALL NOTES IN DESCENDING ORDER */}
+        <div className="mt-2 flex-1">
+          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+            <span className="flex items-center gap-1">
+              <MessageSquare className="w-3 h-3 text-blue-500" />
+              <span>Call Notes (Descending):</span>
             </span>
+            <button
+              type="button"
+              onClick={() => onEditCallNotes(lead)}
+              className="text-blue-600 hover:underline cursor-pointer"
+            >
+              Manage Notes
+            </button>
           </div>
-        </div>
 
-        {/* 4-Call Progress Tracker */}
-        <div className="my-2.5">
-          <div className="flex items-center justify-between text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
-            <span>Call Progression Tracker</span>
-            <span className="text-[10px] text-slate-400">Click step to view notes</span>
-          </div>
-
-          <div className="grid grid-cols-4 gap-1.5">
-            {calls.map((c) => {
-              const isCompleted = Boolean(c.note || (c.num <= currentStep && currentStep > 0));
-              const isCurrent = c.num === currentStep;
-              const hasNote = Boolean(c.note);
-
-              return (
-                <button
-                  key={c.num}
-                  type="button"
-                  onClick={() => onEditCallNotes(lead, c.num)}
-                  title={`Call ${c.num}: ${hasNote ? c.note : 'Click to add note'}`}
-                  className={`py-1.5 px-1 rounded-md text-center text-xs font-semibold flex flex-col items-center justify-center transition-all cursor-pointer border ${
-                    c.num === 1
-                      ? isCompleted
-                        ? 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-700'
-                        : 'bg-slate-100/70 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700'
-                      : c.num === 2
-                      ? isCompleted
-                        ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-700'
-                        : 'bg-slate-100/70 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700'
-                      : c.num === 3
-                      ? isCompleted
-                        ? 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950/80 dark:text-orange-300 dark:border-orange-700'
-                        : 'bg-slate-100/70 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700'
-                      : isCompleted
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-700'
-                      : 'bg-slate-100/70 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700'
-                  } ${isCurrent ? 'ring-2 ring-offset-1 ring-blue-500 dark:ring-offset-slate-900 font-bold' : ''}`}
-                >
-                  <span className="flex items-center gap-0.5">
-                    Call {c.num}
-                    {hasNote && <Check className="w-2.5 h-2.5 inline" />}
-                  </span>
-                  <span className="text-[9px] opacity-75 font-normal truncate max-w-full px-0.5">
-                    {c.date ? c.date.split('/')[0] + '/' + c.date.split('/')[1] : hasNote ? 'Noted' : 'Pending'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Latest Note Box */}
-        <div className="mt-1 flex-1">
-          {latestNote ? (
+          {descendingNotes.length > 0 ? (
             <div
               onClick={() => onEditCallNotes(lead)}
-              className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="space-y-1.5 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700 dark:text-slate-200 mb-1">
-                <span className="flex items-center gap-1">
-                  <FileText className="w-3 h-3 text-blue-500" />
-                  Latest Note ({latestNoteLabel}):
-                </span>
-                {latestDate && <span className="text-[10px] text-slate-400 font-normal">{latestDate}</span>}
-              </div>
-              <p className="line-clamp-2 text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
-                "{latestNote}"
-              </p>
+              {descendingNotes.map((dn, idx) => (
+                <div
+                  key={dn.num}
+                  className={`text-xs ${
+                    idx > 0 ? 'pt-1.5 border-t border-slate-200/60 dark:border-slate-700/60' : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 font-medium">
+                    <span className="font-bold text-blue-600 dark:text-blue-400">
+                      Call {dn.num} {idx === 0 ? '(Latest)' : ''}
+                    </span>
+                    <span>{dn.date || ''}</span>
+                  </div>
+                  <p className="line-clamp-2 text-slate-700 dark:text-slate-300 text-xs mt-0.5 leading-relaxed">
+                    "{dn.note}"
+                  </p>
+                </div>
+              ))}
             </div>
           ) : (
             <div
               onClick={() => onEditCallNotes(lead, 1)}
-              className="p-2.5 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400 hover:border-slate-300 dark:hover:border-slate-700 cursor-pointer"
+              className="p-3 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400 hover:border-slate-300 cursor-pointer"
             >
-              <span>No call notes logged yet. Click to record Call 1.</span>
+              No call notes logged. Click to add Call 1 note.
             </div>
           )}
         </div>
@@ -320,7 +275,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
             <button
               type="button"
               onClick={() => onAdvanceStage(lead)}
-              className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white px-2.5 py-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1"
+              className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:text-white px-2.5 py-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1"
               title="Advance to next call stage"
             >
               <span>Next Call</span>

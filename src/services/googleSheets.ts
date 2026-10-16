@@ -14,8 +14,10 @@ export const SHEET_HEADERS = [
   'Call Stage',
   'Status',
   'Next Follow-up (Day, Date & Time)',
+  'Scheduled Meetings',
   'Follow-up Type',
   'Free Website Status',
+  'Call Notes (Latest First)',
   'Call 1 Date',
   'Call 1 Note',
   'Call 2 Date',
@@ -29,11 +31,38 @@ export const SHEET_HEADERS = [
 
 const DEFAULT_SHEET_NAME = 'Leads';
 
+// Helper to compile all call notes in descending chronological order
+export function compileDescendingNotes(lead: Partial<Lead>): string {
+  const parts: string[] = [];
+  if (lead.call4Note?.trim()) {
+    parts.push(`[Call 4${lead.call4Date ? ` - ${lead.call4Date}` : ''}]: ${lead.call4Note.trim()}`);
+  }
+  if (lead.call3Note?.trim()) {
+    parts.push(`[Call 3${lead.call3Date ? ` - ${lead.call3Date}` : ''}]: ${lead.call3Note.trim()}`);
+  }
+  if (lead.call2Note?.trim()) {
+    parts.push(`[Call 2${lead.call2Date ? ` - ${lead.call2Date}` : ''}]: ${lead.call2Note.trim()}`);
+  }
+  if (lead.call1Note?.trim()) {
+    parts.push(`[Call 1${lead.call1Date ? ` - ${lead.call1Date}` : ''}]: ${lead.call1Note.trim()}`);
+  }
+  return parts.join('\n\n-------------------------\n\n');
+}
+
 // Helper to convert Lead to row values array
 export function leadToRowValues(lead: Lead): (string | number)[] {
   const followUpStr = lead.nextFollowUpDate
     ? `${lead.nextFollowUpDate}${lead.nextFollowUpTime ? ` @ ${lead.nextFollowUpTime}` : ''}`
     : '';
+
+  const meetingStr =
+    lead.scheduledMeeting && lead.scheduledMeeting !== 'None'
+      ? lead.scheduledMeeting
+      : lead.nextFollowUpType === 'Meeting Scheduled' && lead.nextFollowUpDate
+      ? `${lead.nextFollowUpDate}${lead.nextFollowUpTime ? ` @ ${lead.nextFollowUpTime}` : ''}`
+      : 'None';
+
+  const notesDescending = compileDescendingNotes(lead);
 
   return [
     lead.id,
@@ -44,8 +73,10 @@ export function leadToRowValues(lead: Lead): (string | number)[] {
     lead.currentStage,
     lead.status || 'Open',
     followUpStr,
+    meetingStr,
     lead.nextFollowUpType || (lead.nextFollowUpDate ? 'Follow-up Call' : 'None'),
     lead.freeWebsiteStatus || 'Not Asked',
+    notesDescending,
     lead.call1Date || '',
     lead.call1Note || '',
     lead.call2Date || '',
@@ -58,7 +89,7 @@ export function leadToRowValues(lead: Lead): (string | number)[] {
   ];
 }
 
-// Helper to parse a row into a Lead object (supports 16, 17, 18, and 19 column layouts)
+// Helper to parse a row into a Lead object (supports 16, 17, 18, 19, 20, 21 column layouts)
 export function rowValuesToLead(row: string[], rowIndex: number): Lead {
   const stageRaw = (row[5] || 'NOT_CALLED').trim().toUpperCase().replace(/ /g, '_');
   let currentStage: CallStage = 'NOT_CALLED';
@@ -74,16 +105,52 @@ export function rowValuesToLead(row: string[], rowIndex: number): Lead {
     status = statusRaw as any;
   }
 
-  // Detect column structure based on row length
   let nextFollowUpDate = '';
   let nextFollowUpTime = '';
   let nextFollowUpType: any = 'None';
   let hasNextFollowUp = false;
+  let scheduledMeeting = 'None';
   let freeWebsiteStatus: any = 'Not Asked';
+  let unifiedNotes = '';
 
-  let offset = 0;
-  if (row.length >= 19) {
-    offset = 3;
+  let c1Date = '';
+  let c1Note = '';
+  let c2Date = '';
+  let c2Note = '';
+  let c3Date = '';
+  let c3Note = '';
+  let c4Date = '';
+  let c4Note = '';
+  let lastUpdated = '';
+
+  if (row.length >= 21) {
+    // 21-column layout with Scheduled Meetings & unified notes
+    const followUpRaw = (row[7] || '').trim();
+    if (followUpRaw) {
+      hasNextFollowUp = true;
+      if (followUpRaw.includes('@')) {
+        const parts = followUpRaw.split('@');
+        nextFollowUpDate = parts[0].trim();
+        nextFollowUpTime = parts[1].trim();
+      } else {
+        nextFollowUpDate = followUpRaw;
+      }
+    }
+    scheduledMeeting = row[8] || 'None';
+    nextFollowUpType = row[9] || (hasNextFollowUp ? 'Follow-up Call' : 'None');
+    freeWebsiteStatus = row[10] || 'Not Asked';
+    unifiedNotes = row[11] || '';
+    c1Date = row[12] || '';
+    c1Note = row[13] || '';
+    c2Date = row[14] || '';
+    c2Note = row[15] || '';
+    c3Date = row[16] || '';
+    c3Note = row[17] || '';
+    c4Date = row[18] || '';
+    c4Note = row[19] || '';
+    lastUpdated = row[20] || '';
+  } else if (row.length >= 19) {
+    // 19-column layout
     const followUpRaw = (row[7] || '').trim();
     if (followUpRaw) {
       hasNextFollowUp = true;
@@ -97,20 +164,36 @@ export function rowValuesToLead(row: string[], rowIndex: number): Lead {
     }
     nextFollowUpType = row[8] || (hasNextFollowUp ? 'Follow-up Call' : 'None');
     freeWebsiteStatus = row[9] || 'Not Asked';
-  } else if (row.length >= 17) {
-    offset = 2;
-    const followUpRaw = (row[7] || '').trim();
-    if (followUpRaw) {
-      hasNextFollowUp = true;
-      if (followUpRaw.includes('@')) {
-        const parts = followUpRaw.split('@');
-        nextFollowUpDate = parts[0].trim();
-        nextFollowUpTime = parts[1].trim();
-      } else {
-        nextFollowUpDate = followUpRaw;
-      }
+    if (nextFollowUpType === 'Meeting Scheduled' && nextFollowUpDate) {
+      scheduledMeeting = nextFollowUpTime ? `${nextFollowUpDate} @ ${nextFollowUpTime}` : nextFollowUpDate;
     }
-    nextFollowUpType = row[8] || (hasNextFollowUp ? 'Follow-up Call' : 'None');
+    c1Date = row[10] || '';
+    c1Note = row[11] || '';
+    c2Date = row[12] || '';
+    c2Note = row[13] || '';
+    c3Date = row[14] || '';
+    c3Note = row[15] || '';
+    c4Date = row[16] || '';
+    c4Note = row[17] || '';
+    lastUpdated = row[18] || '';
+  } else {
+    // 16 or 17 column layout
+    const followUpRaw = (row[7] || '').trim();
+    if (followUpRaw && followUpRaw.includes('@')) {
+      hasNextFollowUp = true;
+      const parts = followUpRaw.split('@');
+      nextFollowUpDate = parts[0].trim();
+      nextFollowUpTime = parts[1].trim();
+    }
+    c1Date = row[7] || '';
+    c1Note = row[8] || '';
+    c2Date = row[9] || '';
+    c2Note = row[10] || '';
+    c3Date = row[11] || '';
+    c3Note = row[12] || '';
+    c4Date = row[13] || '';
+    c4Note = row[14] || '';
+    lastUpdated = row[15] || '';
   }
 
   return {
@@ -126,16 +209,18 @@ export function rowValuesToLead(row: string[], rowIndex: number): Lead {
     nextFollowUpDate,
     nextFollowUpTime,
     nextFollowUpType,
+    scheduledMeeting,
     freeWebsiteStatus,
-    call1Date: row[7 + offset] || (offset === 0 ? row[7] || '' : ''),
-    call1Note: row[8 + offset] || (offset === 0 ? row[8] || '' : ''),
-    call2Date: row[9 + offset] || (offset === 0 ? row[9] || '' : ''),
-    call2Note: row[10 + offset] || (offset === 0 ? row[10] || '' : ''),
-    call3Date: row[11 + offset] || (offset === 0 ? row[11] || '' : ''),
-    call3Note: row[12 + offset] || (offset === 0 ? row[12] || '' : ''),
-    call4Date: row[13 + offset] || (offset === 0 ? row[13] || '' : ''),
-    call4Note: row[14 + offset] || (offset === 0 ? row[14] || '' : ''),
-    lastUpdated: row[15 + offset] || (offset === 0 ? row[15] || '' : ''),
+    unifiedNotes,
+    call1Date: c1Date,
+    call1Note: c1Note,
+    call2Date: c2Date,
+    call2Note: c2Note,
+    call3Date: c3Date,
+    call3Note: c3Note,
+    call4Date: c4Date,
+    call4Note: c4Note,
+    lastUpdated,
   };
 }
 

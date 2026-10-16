@@ -6,8 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Mic,
-  MicOff,
-  Sparkles,
+  Square,
   X,
   CheckCircle2,
   AlertCircle,
@@ -18,14 +17,13 @@ import {
   Save,
   RotateCcw,
   Volume2,
-  HelpCircle,
-  ChevronDown,
-  ChevronUp,
-  Radio,
-  Play,
-  Square,
+  Calendar,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 import { CallStage, FreeWebsiteStatus, Lead, STAGE_CONFIG, VoiceSegregationResult } from '../types/lead';
+import { formatDayDate, resolveDateAndTimeString } from '../utils/dateResolver';
+import { extractLeadDetails } from '../utils/intelligentExtractor';
 
 interface VoiceCallModalProps {
   isOpen: boolean;
@@ -45,33 +43,34 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
   const [transcript, setTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [micStatusNotice, setMicStatusNotice] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioBase64, setAudioBase64] = useState<string | null>(null);
   const [audioMimeType, setAudioMimeType] = useState<string>('audio/webm');
   const [audioLevel, setAudioLevel] = useState<number>(0);
 
-  // Segregated results
+  // Segregated results state
   const [segregatedResult, setSegregatedResult] = useState<VoiceSegregationResult | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Editable segregated fields
+  // Form fields
   const [editCompany, setEditCompany] = useState('');
   const [editDirector, setEditDirector] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editCallNumber, setEditCallNumber] = useState<1 | 2 | 3 | 4>(1);
+  const [editCallDate, setEditCallDate] = useState('');
   const [editNote, setEditNote] = useState('');
   const [editFreeWebsiteStatus, setEditFreeWebsiteStatus] = useState<FreeWebsiteStatus>('Not Asked');
 
-  // Follow-up edit states
+  // Follow-up and Meeting fields
   const [editHasFollowUp, setEditHasFollowUp] = useState(false);
   const [editFollowUpDate, setEditFollowUpDate] = useState('');
   const [editFollowUpTime, setEditFollowUpTime] = useState('');
   const [editFollowUpType, setEditFollowUpType] = useState('Follow-up Call');
+  const [editScheduledMeeting, setEditScheduledMeeting] = useState('None');
+  const [isMeetingChecked, setIsMeetingChecked] = useState(false);
 
-  // Refs for audio handling
+  // Audio refs
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -87,15 +86,20 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
       setTranscript('');
       setSegregatedResult(null);
       setErrorMsg(null);
-      setMicStatusNotice(null);
       setAudioUrl(null);
       setAudioBase64(null);
       setRecordingSeconds(0);
       setAudioLevel(0);
+      setEditCompany('');
+      setEditDirector('');
+      setEditPhone('');
+      setEditEmail('');
+      setEditNote('');
+      setEditScheduledMeeting('None');
+      setIsMeetingChecked(false);
     }
   }, [isOpen]);
 
-  // Clean up on unmount
   useEffect(() => {
     return () => {
       stopRecordingCleanup();
@@ -141,7 +145,6 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
     setIsRecording(false);
   };
 
-  // Convert Blob to Base64 helper
   const blobToBase64 = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -154,32 +157,25 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
     });
   };
 
-  // Start recording using standard getUserMedia + MediaRecorder
   const startRecording = async () => {
     setErrorMsg(null);
-    setMicStatusNotice(null);
     setAudioUrl(null);
     setAudioBase64(null);
     audioChunksRef.current = [];
 
-    // Check mediaDevices support
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setErrorMsg('Audio capture is not supported by this browser. You can type or paste spoken notes below.');
+      setErrorMsg('Audio recording is not supported in this browser. You can type or paste spoken text.');
       return;
     }
 
     try {
-      // 1. Request microphone stream
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true },
       });
 
       mediaStreamRef.current = stream;
 
-      // 2. Set up AudioContext for real-time visualizer
+      // AudioContext analyzer
       try {
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         if (AudioContextClass) {
@@ -196,33 +192,23 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
             if (!analyserRef.current) return;
             analyserRef.current.getByteFrequencyData(dataArray);
             let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-              sum += dataArray[i];
-            }
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
             const average = sum / dataArray.length;
             setAudioLevel(Math.min(100, Math.round((average / 128) * 100)));
             animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
           };
           updateAudioLevel();
         }
-      } catch (audioCtxErr) {
-        console.warn('Audio level analyzer error (non-fatal):', audioCtxErr);
+      } catch (err) {
+        // Non-fatal
       }
 
-      // 3. Set up MediaRecorder
       let mimeType = 'audio/webm';
       if (typeof MediaRecorder !== 'undefined') {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-          mimeType = 'audio/webm;codecs=opus';
-        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-          mimeType = 'audio/webm';
-        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-          mimeType = 'audio/mp4';
-        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-          mimeType = 'audio/ogg';
-        }
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+        else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
       }
-
       setAudioMimeType(mimeType);
 
       const recorder = new MediaRecorder(stream, { mimeType });
@@ -243,12 +229,12 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
             const b64 = await blobToBase64(audioBlob);
             setAudioBase64(b64);
           } catch (err) {
-            console.error('Failed to encode audio to base64:', err);
+            console.error('Failed to encode audio:', err);
           }
         }
       };
 
-      recorder.start(500); // 500ms chunk interval
+      recorder.start(500);
       setIsRecording(true);
       setRecordingSeconds(0);
 
@@ -256,7 +242,7 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
 
-      // 4. Also attempt Web Speech API concurrently if available for live visual text
+      // Web Speech API for real-time speech-to-text
       const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
@@ -277,33 +263,15 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
             }
           };
 
-          recognition.onerror = (event: any) => {
-            // Note: In sandboxed iframes, SpeechRecognition often throws 'not-allowed'.
-            // Because our MediaRecorder is already recording real audio directly, we inform the user smoothly!
-            console.info('SpeechRecognition note:', event.error);
-            if (event.error === 'not-allowed') {
-              setMicStatusNotice(
-                'Live text streaming is limited in this preview frame, but your voice is being captured with high fidelity for Gemini AI.'
-              );
-            }
-          };
-
           recognitionRef.current = recognition;
           recognition.start();
         } catch (speechErr) {
-          console.warn('SpeechRecognition initialization note:', speechErr);
+          console.warn('SpeechRecognition note:', speechErr);
         }
       }
     } catch (err: any) {
-      console.error('Microphone access error:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMsg(
-          'Microphone permission was denied by your browser. Please follow the steps below to allow microphone access.'
-        );
-        setShowHelp(true);
-      } else {
-        setErrorMsg(`Microphone error: ${err.message || 'Unable to access microphone'}`);
-      }
+      console.error('Mic error:', err);
+      setErrorMsg(`Microphone error: ${err.message || 'Unable to access microphone'}`);
       setIsRecording(false);
     }
   };
@@ -320,24 +288,43 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
     }
   };
 
-  // Test microphone permission test button
-  const handleTestMic = async () => {
-    setErrorMsg(null);
-    setMicStatusNotice(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      setMicStatusNotice('Microphone permission is successfully granted and working!');
-    } catch (err: any) {
-      setErrorMsg(`Permission test failed: ${err.message}. Follow the guide below.`);
-      setShowHelp(true);
-    }
+  // Populate form fields with extracted results
+  const applyExtractedResults = (result: VoiceSegregationResult) => {
+    setSegregatedResult(result);
+    setEditCompany(result.companyName || '');
+    setEditDirector(result.directorName || '');
+    setEditPhone(result.companyNumber || '');
+    setEditEmail(result.email || '');
+    setEditCallNumber(result.callNumber || 1);
+    setEditCallDate(result.callDate || formatDayDate(new Date()));
+    setEditNote(result.callNote || '');
+    setEditFreeWebsiteStatus(result.freeWebsiteStatus || 'Not Asked');
+
+    const hasFollowUp = Boolean(result.hasNextFollowUp || result.nextFollowUpDate);
+    setEditHasFollowUp(hasFollowUp);
+    setEditFollowUpDate(result.nextFollowUpDate || '');
+    setEditFollowUpTime(result.nextFollowUpTime || '');
+    setEditFollowUpType(result.nextFollowUpType || (hasFollowUp ? 'Follow-up Call' : 'None'));
+
+    const isMeeting =
+      result.nextFollowUpType === 'Meeting Scheduled' ||
+      (Boolean(result.scheduledMeeting) && result.scheduledMeeting !== 'None');
+
+    setIsMeetingChecked(isMeeting);
+    setEditScheduledMeeting(
+      result.scheduledMeeting && result.scheduledMeeting !== 'None'
+        ? result.scheduledMeeting
+        : isMeeting && result.nextFollowUpDate
+        ? `${result.nextFollowUpDate}${result.nextFollowUpTime ? ` @ ${result.nextFollowUpTime}` : ''}`
+        : 'None'
+    );
   };
 
-  // Send audio or transcript to backend Gemini
+  // Instant Segregation: 0-Lag Client-Side Engine + Fast AI Refinement
   const handleSegregateDetails = async () => {
-    if (!transcript.trim() && !audioBase64) {
-      setErrorMsg('Please record or enter your call notes first.');
+    const textToSegregate = transcript.trim();
+    if (!textToSegregate && !audioBase64) {
+      setErrorMsg('Please record or enter call notes first.');
       return;
     }
 
@@ -345,17 +332,27 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
       stopRecording();
     }
 
-    setIsProcessing(true);
     setErrorMsg(null);
 
+    // 1. EXTENSIVE OPTIMIZATION: Instant Client-Side Extraction (0ms)
+    // User sees the UI update immediately without any wait!
+    if (textToSegregate) {
+      const instantResult = extractLeadDetails(textToSegregate, new Date());
+      applyExtractedResults(instantResult);
+    }
+
+    // 2. Parallel Fast AI Call to refine details with zero blocking
+    setIsProcessing(true);
     try {
-      const payload: any = {};
-      if (audioBase64) {
+      const payload: any = {
+        clientDate: new Date().toISOString(),
+      };
+      if (textToSegregate) {
+        payload.text = textToSegregate;
+      }
+      if (audioBase64 && !textToSegregate) {
         payload.audioBase64 = audioBase64;
         payload.mimeType = audioMimeType;
-      }
-      if (transcript.trim()) {
-        payload.text = transcript.trim();
       }
 
       const res = await fetch('/api/voice/segregate', {
@@ -364,39 +361,24 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Failed to segregate details (Status ${res.status})`);
+      if (res.ok) {
+        const aiResult: VoiceSegregationResult = await res.json();
+        // Seamlessly refine any field if better
+        if (aiResult.companyName && aiResult.companyName !== 'New Lead') {
+          applyExtractedResults(aiResult);
+        }
+        if (aiResult.transcription && !transcript) {
+          setTranscript(aiResult.transcription);
+        }
       }
-
-      const result: VoiceSegregationResult = await res.json();
-      setSegregatedResult(result);
-
-      if (result.transcription && !transcript) {
-        setTranscript(result.transcription);
-      }
-
-      // Populate editable fields
-      setEditCompany(result.companyName || '');
-      setEditDirector(result.directorName || '');
-      setEditPhone(result.companyNumber || '');
-      setEditEmail(result.email || '');
-      setEditCallNumber(result.callNumber || 1);
-      setEditNote(result.callNote || '');
-      setEditFreeWebsiteStatus(result.freeWebsiteStatus || (result.callNumber === 1 ? 'To Send Free Website' : 'Not Asked'));
-      setEditHasFollowUp(Boolean(result.hasNextFollowUp || result.nextFollowUpDate));
-      setEditFollowUpDate(result.nextFollowUpDate || '');
-      setEditFollowUpTime(result.nextFollowUpTime || '');
-      setEditFollowUpType(result.nextFollowUpType || (result.nextFollowUpDate ? 'Follow-up Call' : 'None'));
     } catch (err: any) {
-      console.error('Segregation error:', err);
-      setErrorMsg(err.message || 'Failed to accurately segregate call details.');
+      console.warn('Background AI refinement note:', err);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Find matching lead in existing leads list
+  // Match existing lead in table
   const matchedLead = React.useMemo(() => {
     if (!editCompany) return null;
     const cleanTarget = editCompany.toLowerCase().trim();
@@ -422,14 +404,14 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
     setErrorMsg(null);
 
     try {
-      const finalStage: CallStage =
-        editCallNumber === 1
-          ? 'CALL_1'
-          : editCallNumber === 2
-          ? 'CALL_2'
-          : editCallNumber === 3
-          ? 'CALL_3'
-          : 'CALL_4';
+      const finalStage: CallStage = `CALL_${editCallNumber}` as CallStage;
+
+      let finalMeeting = editScheduledMeeting;
+      if (isMeetingChecked && editFollowUpDate) {
+        finalMeeting = editFollowUpTime ? `${editFollowUpDate} @ ${editFollowUpTime}` : editFollowUpDate;
+      } else if (!isMeetingChecked) {
+        finalMeeting = 'None';
+      }
 
       const finalResult: VoiceSegregationResult = {
         companyName: editCompany.trim(),
@@ -439,13 +421,19 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
         callNumber: editCallNumber,
         callStage: finalStage,
         callLabel: `Call ${editCallNumber}`,
+        callDate: editCallDate.trim() || formatDayDate(new Date()),
         callNote: editNote.trim(),
         freeWebsiteStatus: editFreeWebsiteStatus,
         hasNextFollowUp: editHasFollowUp,
         nextFollowUpDate: editHasFollowUp ? editFollowUpDate.trim() : '',
         nextFollowUpTime: editHasFollowUp ? editFollowUpTime.trim() : '',
-        nextFollowUpType: editHasFollowUp ? editFollowUpType : 'None',
-        callOutcome: segregatedResult?.callOutcome || (editHasFollowUp ? 'Follow-up Scheduled' : 'Connected & Discussed'),
+        nextFollowUpType: isMeetingChecked ? 'Meeting Scheduled' : editHasFollowUp ? editFollowUpType : 'None',
+        scheduledMeeting: finalMeeting,
+        callOutcome: isMeetingChecked
+          ? 'Meeting Scheduled'
+          : editHasFollowUp
+          ? 'Follow-up Scheduled'
+          : 'Connected & Discussed',
       };
 
       await onApplyVoiceUpdate(finalResult, matchedLead);
@@ -459,37 +447,21 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
 
   if (!isOpen) return null;
 
-  const currentStageKey: CallStage =
-    editCallNumber === 1
-      ? 'CALL_1'
-      : editCallNumber === 2
-      ? 'CALL_2'
-      : editCallNumber === 3
-      ? 'CALL_3'
-      : 'CALL_4';
-
-  const currentStageConfig = STAGE_CONFIG[currentStageKey];
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/65 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/65 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-h-[92vh] flex flex-col overflow-hidden">
-        {/* Header */}
+        {/* Header - Simple and Clean (no tags/presets) */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20 font-bold shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md font-bold shrink-0">
               <Mic className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                  Voice Call Logger & Segregation
-                </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                  Gemini Precision
-                </span>
-              </div>
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                Voice Call Logger
+              </h2>
               <p className="text-xs text-slate-500">
-                Dictate your call details: company, call number, discussion notes, phone & email.
+                Speak your call conversation naturally: company, call number, follow-up, and notes.
               </p>
             </div>
           </div>
@@ -503,96 +475,18 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
           </button>
         </div>
 
-        {/* Notices & Alerts */}
         {errorMsg && (
-          <div className="mt-3 p-3 rounded-lg bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-800 flex items-start gap-2">
+          <div className="mt-3 p-3 rounded-lg bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 text-xs border border-rose-200 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <span>{errorMsg}</span>
-              <button
-                type="button"
-                onClick={() => setShowHelp((prev) => !prev)}
-                className="ml-2 font-semibold underline hover:text-rose-900 dark:hover:text-rose-100"
-              >
-                {showHelp ? 'Hide Fix Guide' : 'How to Fix Permission'}
-              </button>
-            </div>
+            <span>{errorMsg}</span>
           </div>
         )}
 
-        {micStatusNotice && (
-          <div className="mt-3 p-2.5 rounded-lg bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 text-xs border border-emerald-200 dark:border-emerald-800 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-            <span>{micStatusNotice}</span>
-          </div>
-        )}
-
-        {/* Browser Permission Help Box (Accordion) */}
-        {showHelp && (
-          <div className="mt-3 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs space-y-3 animate-in fade-in duration-150">
-            <div className="flex items-center justify-between">
-              <h4 className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5 text-sm">
-                <HelpCircle className="w-4 h-4 text-amber-600" />
-                Why did it say "Speech recognition error not allowed"?
-              </h4>
-              <button
-                onClick={() => setShowHelp(false)}
-                className="text-[11px] text-amber-700 hover:underline cursor-pointer"
-              >
-                Dismiss
-              </button>
-            </div>
-
-            <p className="text-amber-800 dark:text-amber-300 leading-relaxed">
-              Google AI Studio runs web apps inside an embedded iframe sandbox. Chrome and other browsers block Web Speech API inside sandboxed frames, even if microphone works in the main AI Studio interface.
-            </p>
-
-            <div className="p-3 bg-white dark:bg-slate-900 rounded-lg border border-amber-300 dark:border-amber-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <div>
-                <span className="font-bold text-slate-800 dark:text-slate-100 block">
-                  🚀 Solution 1: Open in Standalone Tab (Recommended)
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Opens this app in a full browser tab where microphone permission prompts normally with 1 click.
-                </span>
-              </div>
-              <a
-                href={window.location.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 shrink-0 shadow-sm transition-colors"
-              >
-                <span>Open in Full Tab</span>
-                <Play className="w-3 h-3 fill-white" />
-              </a>
-            </div>
-
-            <div className="text-amber-800 dark:text-amber-300 space-y-1">
-              <span className="font-bold block">💡 Solution 2: Browser URL Bar Settings:</span>
-              <ol className="list-decimal list-inside space-y-1 pl-1 text-[11px]">
-                <li>Click the <strong>tune / slider icon</strong> or <strong>lock (🔒)</strong> on the far left of your browser address bar.</li>
-                <li>Set <strong>Microphone</strong> to <strong>"Allow"</strong>.</li>
-                <li>Or simply click any of the <strong>4 quick preset buttons</strong> or paste your spoken text below — Gemini segregate works instantly without any mic hardware!</li>
-              </ol>
-            </div>
-
-            <div className="pt-1 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleTestMic}
-                className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shadow-xs cursor-pointer"
-              >
-                Test Microphone Access
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto py-4 space-y-5">
-          {/* Microphone Recording Control Area */}
-          <div className="p-5 rounded-2xl bg-gradient-to-b from-slate-50 to-slate-100/80 dark:from-slate-850 dark:to-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3 relative overflow-hidden">
+        {/* Modal Body */}
+        <div className="flex-1 overflow-y-auto py-4 space-y-4">
+          {/* Recording Area */}
+          <div className="p-5 rounded-2xl bg-gradient-to-b from-slate-50 to-slate-100/70 dark:from-slate-850 dark:to-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3 relative overflow-hidden">
             <div className="flex flex-col items-center justify-center">
-              {/* Mic Button with Dynamic Pulsing Wave */}
               <div className="relative">
                 {isRecording && (
                   <div
@@ -616,16 +510,15 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
 
               <div className="mt-3">
                 <span className="text-sm font-bold text-slate-800 dark:text-slate-100 block">
-                  {isRecording ? `Recording... (${recordingSeconds}s)` : 'Click to Record Call Details'}
+                  {isRecording ? `Recording... (${recordingSeconds}s)` : 'Click Mic to Record'}
                 </span>
                 <span className="text-xs text-slate-500">
                   {isRecording
-                    ? 'Speak clearly: state the company name, call number (1, 2, 3, or 4), phone, email, and what happened.'
-                    : 'Records voice audio & segregates with Gemini CRM precision'}
+                    ? 'Speak clearly: e.g. "Calling Arab Bakery today for Call 2, meeting scheduled tomorrow at 3 PM"'
+                    : 'Instant voice-to-CRM segregation'}
                 </span>
               </div>
 
-              {/* Real-time Audio Level Meter when recording */}
               {isRecording && (
                 <div className="w-48 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden mt-3">
                   <div
@@ -635,158 +528,66 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                 </div>
               )}
 
-              {/* Recorded Audio Playback if available */}
               {audioUrl && !isRecording && (
                 <div className="mt-3 flex items-center gap-2 p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
                   <Volume2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="font-medium text-slate-700 dark:text-slate-300">Voice clip recorded ({recordingSeconds}s)</span>
+                  <span className="font-medium text-slate-700 dark:text-slate-300">Recorded Audio</span>
                   <audio src={audioUrl} controls className="h-7 w-48 ml-2" />
                 </div>
               )}
-            </div>
-
-            {/* Quick example prompts */}
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-white/80 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200/60 dark:border-slate-800/80 text-left space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-                  Quick Presets (Click any to test segregation instantly):
-                </span>
-                <span className="text-[10px] text-slate-400">1-Click Test</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTranscript(
-                      'the first call was with the company name called Arab Bakery they told I have to send a free website they will see and get back to me'
-                    );
-                    setAudioBase64(null);
-                    setAudioUrl(null);
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-800 hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-left text-[11px] cursor-pointer transition-colors"
-                >
-                  <span className="font-bold block text-blue-900 dark:text-blue-200">🍞 Arab Bakery (1st Call)</span>
-                  <span className="text-[10px] text-blue-700 dark:text-blue-400">Send free website, they will see & get back</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTranscript(
-                      'Just finished call number two with Apex Horizon Technologies. Spoke with Director Marcus Sterling, number 555-234-5678, email marcus@apexhorizon.io. Reviewed pricing tiers, they asked us to send the enterprise agreement for legal review tomorrow.'
-                    );
-                    setAudioBase64(null);
-                    setAudioUrl(null);
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-left text-[11px] cursor-pointer transition-colors"
-                >
-                  <span className="font-bold block text-amber-900 dark:text-amber-200">⚡ Apex Horizon (2nd Call)</span>
-                  <span className="text-[10px] text-amber-700 dark:text-amber-400">Marcus Sterling: legal review tomorrow</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTranscript(
-                      'Third call with CloudPeak Solutions with Director Elena Rostova, number 415-555-9012, email elena@cloudpeak.tech. Completed demo walk-through, meeting scheduled next Tuesday at 3:00 PM for decision review.'
-                    );
-                    setAudioBase64(null);
-                    setAudioUrl(null);
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-orange-50 text-orange-800 hover:bg-orange-100 dark:bg-orange-950/60 dark:text-orange-300 border border-orange-200 dark:border-orange-800 text-left text-[11px] cursor-pointer transition-colors"
-                >
-                  <span className="font-bold block text-orange-900 dark:text-orange-200">📅 CloudPeak (3rd Call)</span>
-                  <span className="text-[10px] text-orange-700 dark:text-orange-400">Meeting scheduled Tuesday at 3:00 PM</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTranscript(
-                      'First call with Metro Logistics, spoke to director, asked if they need a free website, said to follow up tomorrow at 11 AM.'
-                    );
-                    setAudioBase64(null);
-                    setAudioUrl(null);
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-left text-[11px] cursor-pointer transition-colors"
-                >
-                  <span className="font-bold block text-emerald-900 dark:text-emerald-200">📞 Metro Logistics (1st Call)</span>
-                  <span className="text-[10px] text-emerald-700 dark:text-emerald-400">Free website offer, follow up tomorrow 11 AM</span>
-                </button>
-              </div>
             </div>
           </div>
 
           {/* Transcript / Spoken Text Input */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Volume2 className="w-3.5 h-3.5 text-blue-500" />
-                <span>Call Voice Transcript / Dictation Text:</span>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Spoken Transcript:
               </label>
-              <div className="flex items-center gap-3">
+              {transcript && (
                 <button
                   type="button"
-                  onClick={() => setShowHelp((prev) => !prev)}
+                  onClick={() => {
+                    setTranscript('');
+                    setSegregatedResult(null);
+                  }}
                   className="text-[11px] text-slate-400 hover:text-slate-600 flex items-center gap-1 cursor-pointer"
                 >
-                  <HelpCircle className="w-3 h-3" />
-                  Permission Help
+                  <RotateCcw className="w-3 h-3" />
+                  Clear
                 </button>
-                {transcript && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTranscript('');
-                      setSegregatedResult(null);
-                      setAudioUrl(null);
-                      setAudioBase64(null);
-                    }}
-                    className="text-[11px] text-slate-400 hover:text-slate-600 flex items-center gap-1 cursor-pointer"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    Clear
-                  </button>
-                )}
-              </div>
+              )}
             </div>
 
             <textarea
               rows={3}
               value={transcript}
               onChange={(e) => setTranscript(e.target.value)}
-              placeholder="Your spoken words will appear here, or you can write/paste details manually..."
+              placeholder="Your voice note transcript will appear here, or you can type directly..."
               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 outline-none leading-relaxed"
             />
 
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400">
-                {audioBase64
-                  ? 'Voice clip ready for Gemini'
-                  : 'Ready to segregate into structured lead data'}
-              </span>
-
+            <div className="mt-2 flex items-center justify-end">
               <button
                 type="button"
                 onClick={handleSegregateDetails}
-                disabled={isProcessing || (!transcript.trim() && !audioBase64)}
-                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs rounded-lg shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                disabled={!transcript.trim() && !audioBase64}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <Sparkles className="w-4 h-4" />
-                <span>{isProcessing ? 'Segregating with Gemini...' : 'Accurately Segregate Details'}</span>
+                <span>Accurately Segregate Details</span>
               </button>
             </div>
           </div>
 
           {/* Segregated Structured Results Preview */}
           {segregatedResult && (
-            <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/30 dark:bg-blue-950/20 space-y-4 animate-in fade-in duration-200">
+            <div className="p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/30 dark:bg-blue-950/20 space-y-4 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                   <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 dark:text-blue-200">
-                    Segregated CRM Fields
+                    Segregated Lead Fields
                   </h3>
                 </div>
 
@@ -797,40 +598,48 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                    New Lead Will Be Created
+                    New Lead
                   </span>
                 )}
               </div>
 
-              {/* Color-coded Call Number / Stage Tag */}
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                  Call Identified:
-                </span>
-                <div className="flex flex-wrap items-center gap-2">
-                  {([1, 2, 3, 4] as const).map((num) => {
-                    const stgKey = (`CALL_${num}` as CallStage);
-                    const cfg = STAGE_CONFIG[stgKey];
-                    const isSelected = editCallNumber === num;
-                    return (
+              {/* Call Number & Date Selector */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white dark:bg-slate-850 rounded-lg border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                    Call Number:
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {([1, 2, 3, 4] as const).map((num) => (
                       <button
                         key={num}
                         type="button"
                         onClick={() => setEditCallNumber(num)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                          isSelected
-                            ? `${cfg.badgeBg} border-transparent ring-2 ring-blue-500 shadow-sm`
-                            : 'bg-white dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+                        className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                          editCallNumber === num
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
                         }`}
                       >
-                        Call {num} ({cfg.shortLabel})
+                        Call {num}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-slate-500">Call Date:</span>
+                  <input
+                    type="text"
+                    value={editCallDate}
+                    onChange={(e) => setEditCallDate(e.target.value)}
+                    placeholder="e.g. Friday, Oct 16, 2026"
+                    className="bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-medium text-slate-800 dark:text-slate-200 w-44"
+                  />
                 </div>
               </div>
 
-              {/* Segregated Inputs */}
+              {/* Company & Contact Fields */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
@@ -865,7 +674,7 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Company Number
+                    Phone Number
                   </label>
                   <div className="relative">
                     <Phone className="w-3.5 h-3.5 text-emerald-600 absolute left-2.5 top-2.5" />
@@ -873,7 +682,7 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                       type="text"
                       value={editPhone}
                       onChange={(e) => setEditPhone(e.target.value)}
-                      placeholder="+1 (555) 000-0000"
+                      placeholder="e.g. +1 555-0192"
                       className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs font-mono text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none"
                     />
                   </div>
@@ -881,7 +690,7 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Email / Gmail
+                    Gmail / Email
                   </label>
                   <div className="relative">
                     <Mail className="w-3.5 h-3.5 text-blue-600 absolute left-2.5 top-2.5" />
@@ -896,39 +705,111 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                 </div>
               </div>
 
-              {/* Segregated Note */}
+              {/* Single Clean Note Field for this call */}
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  What Happened in Call {editCallNumber} (Note):
+                  Call {editCallNumber} Note (What Was Discussed):
                 </label>
                 <textarea
                   rows={3}
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
+                  placeholder="Conversation notes..."
                   className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg p-2.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 outline-none leading-relaxed"
                 />
               </div>
 
-              {/* Free Website Status Tracker */}
-              <div className="p-3 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 text-xs space-y-1.5">
+              {/* Scheduled Meetings & Next Follow-up Section */}
+              <div className="p-3.5 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800/80 text-xs space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-indigo-950 dark:text-indigo-200 text-xs flex items-center gap-1.5">
-                    <span>🌐</span>
-                    <span>Free Website Offer / Follow-up:</span>
-                  </span>
-                  <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold">
-                    {editFreeWebsiteStatus === 'To Send Free Website' ? 'Action Needed: Send Demo' : 'Status'}
+                  <div className="flex items-center gap-1.5 font-bold text-amber-950 dark:text-amber-200 text-xs">
+                    <Calendar className="w-4 h-4 text-amber-600" />
+                    <span>Follow-up & Scheduled Meetings:</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={editHasFollowUp}
+                        onChange={(e) => setEditHasFollowUp(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded text-blue-600"
+                      />
+                      <span>Follow-up Call</span>
+                    </label>
+
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-950 px-2 py-0.5 rounded">
+                      <input
+                        type="checkbox"
+                        checked={isMeetingChecked}
+                        onChange={(e) => {
+                          setIsMeetingChecked(e.target.checked);
+                          if (e.target.checked) {
+                            setEditHasFollowUp(true);
+                            setEditFollowUpType('Meeting Scheduled');
+                          }
+                        }}
+                        className="w-3.5 h-3.5 rounded text-emerald-600"
+                      />
+                      <span>Scheduled Meeting</span>
+                    </label>
+                  </div>
+                </div>
+
+                {(editHasFollowUp || isMeetingChecked) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        Day & Date:
+                      </label>
+                      <input
+                        type="text"
+                        value={editFollowUpDate}
+                        onChange={(e) => setEditFollowUpDate(e.target.value)}
+                        placeholder="e.g. Saturday, Oct 17, 2026"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        Time (if mentioned):
+                      </label>
+                      <input
+                        type="text"
+                        value={editFollowUpTime}
+                        onChange={(e) => setEditFollowUpTime(e.target.value)}
+                        placeholder="e.g. 3:00 PM"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Scheduled Meeting Output Preview */}
+                <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/50 flex items-center justify-between text-xs">
+                  <span className="text-slate-600 dark:text-slate-400">Scheduled Meeting Column:</span>
+                  <span className="font-bold text-amber-900 dark:text-amber-200">
+                    {isMeetingChecked && editFollowUpDate
+                      ? `${editFollowUpDate}${editFollowUpTime ? ` @ ${editFollowUpTime}` : ''}`
+                      : editScheduledMeeting !== 'None'
+                      ? editScheduledMeeting
+                      : 'None'}
                   </span>
                 </div>
+              </div>
+
+              {/* Free Website Status */}
+              <div className="p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/60 text-xs space-y-1.5">
+                <span className="font-bold text-indigo-950 dark:text-indigo-200 text-xs">
+                  Free Website Status:
+                </span>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                  {(
-                    [
-                      { id: 'To Send Free Website', label: 'To Send Free Website' },
-                      { id: 'Free Website Sent', label: 'Website Sent' },
-                      { id: 'Website Reviewing', label: 'Under Review' },
-                      { id: 'Not Asked', label: 'Not Asked / Unsure' },
-                    ] as const
-                  ).map((opt) => (
+                  {[
+                    { id: 'To Send Free Website', label: 'To Send Free Website' },
+                    { id: 'Free Website Sent', label: 'Website Sent' },
+                    { id: 'Website Reviewing', label: 'Under Review' },
+                    { id: 'Not Asked', label: 'Not Asked' },
+                  ].map((opt) => (
                     <button
                       key={opt.id}
                       type="button"
@@ -936,7 +817,7 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                       className={`px-2 py-1.5 rounded text-[11px] font-medium border text-center transition-all cursor-pointer ${
                         editFreeWebsiteStatus === opt.id
                           ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-xs'
-                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-indigo-50/50'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                       }`}
                     >
                       {opt.label}
@@ -945,76 +826,13 @@ export const VoiceCallModal: React.FC<VoiceCallModalProps> = ({
                 </div>
               </div>
 
-              {/* Segregated Follow-up / Scheduled Meeting */}
-              <div className="p-3 rounded-lg bg-amber-500/10 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-200 text-xs">
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Follow-up or Meeting Scheduled:</span>
-                  </div>
-                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-slate-700 dark:text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={editHasFollowUp}
-                      onChange={(e) => setEditHasFollowUp(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded text-blue-600"
-                    />
-                    <span>Schedule Follow-up</span>
-                  </label>
-                </div>
-
-                {editHasFollowUp && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 animate-in fade-in">
-                    <div>
-                      <label className="block text-[10px] text-slate-500 mb-0.5">Type</label>
-                      <select
-                        value={editFollowUpType}
-                        onChange={(e) => setEditFollowUpType(e.target.value)}
-                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs"
-                      >
-                        <option value="Follow-up Call">Follow-up Call</option>
-                        <option value="Meeting Scheduled">Meeting Scheduled</option>
-                        <option value="Free Website Review">Free Website Review</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] text-slate-500 mb-0.5">Day & Date</label>
-                      <input
-                        type="text"
-                        value={editFollowUpDate}
-                        onChange={(e) => setEditFollowUpDate(e.target.value)}
-                        placeholder="e.g. Tomorrow or Friday"
-                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] text-slate-500 mb-0.5">Time</label>
-                      <input
-                        type="text"
-                        value={editFollowUpTime}
-                        onChange={(e) => setEditFollowUpTime(e.target.value)}
-                        placeholder="e.g. 3:00 PM"
-                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Action to Save to Google Sheets */}
-              <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-blue-200/60 dark:border-blue-900/40">
-                <span className="text-[11px] text-slate-500">
-                  Will sync to <strong>Google Sheet</strong> under{' '}
-                  <strong className={currentStageConfig.textClass}>{currentStageConfig.label}</strong>
-                </span>
-
+              {/* Confirm & Save */}
+              <div className="pt-2 flex justify-end">
                 <button
                   type="button"
                   onClick={handleSaveToSheet}
                   disabled={isSaving}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                   <Save className="w-4 h-4" />
                   <span>{isSaving ? 'Syncing to Sheet...' : 'Confirm & Save to Google Sheets'}</span>

@@ -21,6 +21,7 @@ import {
   getSpreadsheetDetails,
 } from './services/googleSheets';
 import { CallStage, Lead, SpreadsheetInfo, STAGE_CONFIG, VoiceSegregationResult } from './types/lead';
+import { formatDayDate } from './utils/dateResolver';
 import { SignInScreen } from './components/SignInScreen';
 import { Navbar } from './components/Navbar';
 import { ColorLegend, StageFilter } from './components/ColorLegend';
@@ -63,7 +64,7 @@ export default function App() {
   const [appError, setAppError] = useState<string | null>(null);
 
   // Filter & View State
-  const [selectedStage, setSelectedStage] = useState<CallStage | 'ALL'>('ALL');
+  const [selectedStage, setSelectedStage] = useState<StageFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
 
@@ -270,7 +271,7 @@ export default function App() {
       throw new Error('Not connected to a Google Sheet');
     }
 
-    const todayStr = new Date().toLocaleDateString();
+    const todayStr = result.callDate || formatDayDate(new Date());
     const timestamp = new Date().toLocaleString();
     const callNum = result.callNumber;
 
@@ -288,6 +289,7 @@ export default function App() {
         nextFollowUpDate: result.hasNextFollowUp ? result.nextFollowUpDate : matched.nextFollowUpDate,
         nextFollowUpTime: result.hasNextFollowUp ? result.nextFollowUpTime : matched.nextFollowUpTime,
         nextFollowUpType: (result.hasNextFollowUp ? (result.nextFollowUpType as any) : matched.nextFollowUpType) || 'Follow-up Call',
+        scheduledMeeting: result.scheduledMeeting || matched.scheduledMeeting || 'None',
         freeWebsiteStatus: result.freeWebsiteStatus || matched.freeWebsiteStatus || 'Not Asked',
         call1Note: callNum === 1 ? result.callNote : matched.call1Note,
         call1Date: callNum === 1 ? todayStr : matched.call1Date,
@@ -315,6 +317,7 @@ export default function App() {
         nextFollowUpDate: result.nextFollowUpDate || '',
         nextFollowUpTime: result.nextFollowUpTime || '',
         nextFollowUpType: (result.nextFollowUpType as any) || (result.nextFollowUpDate ? 'Follow-up Call' : 'None'),
+        scheduledMeeting: result.scheduledMeeting || 'None',
         freeWebsiteStatus: result.freeWebsiteStatus || (result.callStage === 'CALL_1' ? 'To Send Free Website' : 'Not Asked'),
         call1Date: callNum === 1 ? todayStr : '',
         call1Note: callNum === 1 ? result.callNote : '',
@@ -395,8 +398,20 @@ export default function App() {
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       // Stage filter
-      if (selectedStage !== 'ALL' && lead.currentStage !== selectedStage) {
-        return false;
+      if (selectedStage !== 'ALL') {
+        if (selectedStage === 'FOLLOW_UP') {
+          if (!lead.hasNextFollowUp && !lead.nextFollowUpDate) return false;
+        } else if (selectedStage === 'FREE_WEBSITE') {
+          if (
+            lead.freeWebsiteStatus !== 'To Send Free Website' &&
+            lead.freeWebsiteStatus !== 'Website Reviewing' &&
+            lead.freeWebsiteStatus !== 'Free Website Sent'
+          ) {
+            return false;
+          }
+        } else if (lead.currentStage !== selectedStage) {
+          return false;
+        }
       }
       // Search query filter
       if (searchQuery.trim()) {

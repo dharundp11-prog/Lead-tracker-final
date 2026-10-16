@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { PhoneCall, Table, CheckCircle2, ShieldCheck, ArrowRight, FileSpreadsheet } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileSpreadsheet, Copy, Check, ExternalLink, AlertTriangle } from 'lucide-react';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface SignInScreenProps {
   onSignIn: () => void;
@@ -13,6 +14,18 @@ interface SignInScreenProps {
 }
 
 export const SignInScreen: React.FC<SignInScreenProps> = ({ onSignIn, isLoading, error }) => {
+  const [copied, setCopied] = useState(false);
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isUnauthorizedDomain = error?.includes('unauthorized-domain');
+
+  const handleCopyHost = () => {
+    if (navigator.clipboard && currentHost) {
+      navigator.clipboard.writeText(currentHost);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-850 to-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-12 selection:bg-blue-500 selection:text-white">
       <div className="max-w-md w-full bg-slate-800/80 backdrop-blur-xl border border-slate-700/80 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
@@ -39,7 +52,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({ onSignIn, isLoading,
         </p>
 
         {/* Feature Highlights */}
-        <div className="space-y-3 mb-8 bg-slate-900/60 rounded-xl p-4 border border-slate-700/50">
+        <div className="space-y-3 mb-6 bg-slate-900/60 rounded-xl p-4 border border-slate-700/50">
           <div className="flex items-start gap-3 text-xs text-slate-300">
             <div className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 mt-0.5 font-bold">
               1
@@ -63,8 +76,55 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({ onSignIn, isLoading,
         </div>
 
         {error && (
-          <div className="mb-6 p-3 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-            <span>{error}</span>
+          <div className="mb-6 p-4 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs space-y-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-rose-200">
+                  {isUnauthorizedDomain ? 'Firebase Domain Authorization Required' : 'Authentication Error'}
+                </p>
+                <p className="text-[11px] text-rose-300/90 mt-1 leading-relaxed">
+                  {isUnauthorizedDomain
+                    ? `Firebase project "${firebaseConfig.projectId}" requires this app's preview domain to be added to its Authorized Domains list.`
+                    : error}
+                </p>
+              </div>
+            </div>
+
+            {isUnauthorizedDomain && (
+              <div className="bg-slate-950/70 p-2.5 rounded-lg border border-slate-700/60 space-y-2">
+                <div className="text-[11px] text-slate-400">Current app domain:</div>
+                <div className="flex items-center justify-between gap-2 bg-slate-900 px-2.5 py-1.5 rounded border border-slate-700 font-mono text-[11px] text-emerald-300 break-all">
+                  <span>{currentHost}</span>
+                  <button
+                    type="button"
+                    onClick={handleCopyHost}
+                    className="shrink-0 flex items-center gap-1 text-[10px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded transition-colors"
+                    title="Copy domain to clipboard"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span>Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div className="text-[10px] text-slate-400 space-y-1 pt-1 leading-normal">
+                  <p className="font-medium text-slate-300">Quick fix in Firebase Console:</p>
+                  <ol className="list-decimal pl-4 space-y-0.5 text-slate-400">
+                    <li>Open <strong>Firebase Console</strong> &gt; Project <strong>{firebaseConfig.projectId}</strong></li>
+                    <li>Go to <strong>Authentication</strong> &gt; <strong>Settings</strong> tab &gt; <strong>Authorized domains</strong></li>
+                    <li>Click <strong>Add domain</strong> and paste the copied domain above</li>
+                  </ol>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

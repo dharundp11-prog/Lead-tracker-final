@@ -57,6 +57,7 @@ export const NewLeadModal: React.FC<NewLeadModalProps> = ({
         nextFollowUpDate: '',
         nextFollowUpTime: '',
         nextFollowUpType: 'None',
+        scheduledMeeting: 'None',
         call1Date: currentStage === 'CALL_1' || initialNote ? nowStr : '',
         call1Note: initialNote.trim(),
         call2Date: '',
