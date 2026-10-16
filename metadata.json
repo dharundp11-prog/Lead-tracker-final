@@ -1,0 +1,8 @@
+{
+  "name": "Google Sheets Lead Tracker",
+  "description": "Simple color-coded lead management directly synchronized with Google Sheets for tracking call stages and call notes.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
